@@ -118,6 +118,12 @@ function setupThree(): void {
 
   window.addEventListener('resize', onWindowResize);
   updateHUD();
+
+  // Attach canvas-level listeners
+  const tapLog = (ev: Event) => console.log('canvas tap', { type: ev.type, ts: Date.now() });
+  renderer.domElement.addEventListener('click', tapLog, { capture: true });
+  renderer.domElement.addEventListener('pointerdown', tapLog, { capture: true });
+  renderer.domElement.addEventListener('touchstart', tapLog, { capture: true, passive: false });
 }
 
 function onWindowResize(): void {
@@ -361,25 +367,16 @@ async function tryStartARAuto(): Promise<void> {
   const attempt = async () => {
     try { await startAR(); } catch (e) { console.error('startAR failed', e); }
   };
+  // global pointer/touch logging earliest possible
+  const globalTap = (ev: Event) => console.log('global tap', { target: (ev.target as HTMLElement)?.id, type: ev.type, ts: Date.now() });
+  document.addEventListener('click', globalTap, { capture: true });
+  document.addEventListener('touchstart', globalTap, { capture: true, passive: false });
+  document.addEventListener('pointerdown', globalTap, { capture: true });
+  window.addEventListener('pointerdown', globalTap, { capture: true });
+  document.addEventListener('keydown', (e) => console.log('keydown', e.key));
+  document.addEventListener('keyup', (e) => console.log('keyup', e.key));
+
   await attempt();
-  const tapLog = (ev: Event) => console.log('dom tap', { type: ev.type, ts: Date.now() });
-  document.addEventListener('click', tapLog, { capture: true });
-  document.addEventListener('touchstart', tapLog, { capture: true });
-  document.addEventListener('pointerdown', tapLog, { capture: true });
-  window.addEventListener('pointerdown', tapLog, { capture: true });
-  if (renderer?.domElement) {
-    renderer.domElement.addEventListener('pointerdown', tapLog, { capture: true });
-    renderer.domElement.addEventListener('click', tapLog, { capture: true });
-  }
-  if (overlayEl) {
-    const onOverlayTap = async (ev: Event) => {
-      console.log('overlay tap', { type: ev.type, ts: Date.now() });
-      await attempt();
-    };
-    overlayEl.addEventListener('click', onOverlayTap);
-    overlayEl.addEventListener('touchstart', onOverlayTap);
-    overlayEl.addEventListener('pointerdown', onOverlayTap);
-  }
   const once = async (ev: Event) => {
     document.removeEventListener('click', once);
     document.removeEventListener('touchstart', once);
@@ -388,10 +385,17 @@ async function tryStartARAuto(): Promise<void> {
     await attempt();
   };
   document.addEventListener('click', once, { once: true });
-  document.addEventListener('touchstart', once, { once: true });
+  document.addEventListener('touchstart', once, { once: true, passive: false });
   document.addEventListener('pointerdown', once, { once: true });
+  if (overlayEl) {
+    const onOverlayTap = async (ev: Event) => {
+      console.log('overlay tap', { type: ev.type, ts: Date.now() });
+      await attempt();
+    };
+    overlayEl.addEventListener('click', onOverlayTap);
+    overlayEl.addEventListener('touchstart', onOverlayTap, { passive: false } as any);
+    overlayEl.addEventListener('pointerdown', onOverlayTap);
+  }
 }
 
-window.addEventListener('load', () => {
-  setTimeout(() => { void tryStartARAuto(); }, 50);
-});
+window.addEventListener('load', () => { setTimeout(() => { void tryStartARAuto(); }, 50); });
