@@ -249,6 +249,7 @@ function tryReload(): void {
 }
 
 function onShoot(): void {
+  console.log('tap/select: shoot fired', { started, ammo, reserve, reloading, ts: Date.now() });
   if (!started) return; // ignore taps before start
   if (reloading) return;
   if (ammo <= 0) { playClick(300, 120, 0.4); tryReload(); return; }
@@ -268,7 +269,10 @@ function onShoot(): void {
       if (idx >= 0) flies.splice(idx, 1);
       score += 1; updateHUD(); playHit();
       spawnHitEffect(hit.point);
+      console.log('fly hit!', { remaining: flies.length });
     }
+  } else {
+    console.log('no hit');
   }
 
   if (ammo === 0) tryReload();
@@ -357,7 +361,12 @@ async function tryStartARAuto(): Promise<void> {
     try { await startAR(); } catch (e) { console.error('startAR failed', e); }
   };
   await attempt();
-  const once = async () => { document.removeEventListener('click', once); document.removeEventListener('touchstart', once); await attempt(); };
+  const once = async (ev: Event) => {
+    document.removeEventListener('click', once);
+    document.removeEventListener('touchstart', once);
+    console.log('tap detected for start', { type: ev.type, ts: Date.now() });
+    await attempt();
+  };
   document.addEventListener('click', once, { once: true });
   document.addEventListener('touchstart', once, { once: true });
 }
