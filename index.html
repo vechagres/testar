@@ -18,6 +18,19 @@
         display: none; align-items: center; justify-content: center;
         font-size: 18px; text-align: center; padding: 24px;
       }
+      #crosshair {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: 28px; height: 28px; pointer-events: none; z-index: 5;
+      }
+      #crosshair::before, #crosshair::after {
+        content: ""; position: absolute; background: rgba(255,255,255,0.95);
+      }
+      #crosshair::before { /* vertical */
+        left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%);
+      }
+      #crosshair::after { /* horizontal */
+        top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%);
+      }
     </style>
   </head>
   <body>
@@ -26,6 +39,7 @@
       <div id="hint"></div>
     </div>
     <div id="gestureOverlay">Коснитесь экрана, чтобы запустить AR</div>
+    <div id="crosshair" aria-hidden="true"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

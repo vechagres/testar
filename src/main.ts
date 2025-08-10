@@ -14,6 +14,20 @@ let xrLocalSpace: XRReferenceSpace | null = null;
 let xrViewerSpace: XRReferenceSpace | null = null;
 let started = false;
 
+// Flies state
+interface Fly {
+  group: THREE.Group;
+  velocity: THREE.Vector3;
+  state: 'flying' | 'landing' | 'landed';
+  targetPos: THREE.Vector3 | null;
+  landNormal: THREE.Vector3 | null;
+  flapPhase: number;
+}
+const flies: Fly[] = [];
+const maxFlies = 10;
+const worldPlanes: { position: THREE.Vector3; normal: THREE.Vector3 }[] = [];
+const raycaster = new THREE.Raycaster();
+
 function setupThree(): void {
   scene = new THREE.Scene();
   scene.background = null;
@@ -43,7 +57,7 @@ function setupThree(): void {
   scene.add(reticle);
 
   controller = renderer.xr.getController(0);
-  controller.addEventListener('select', onSelect);
+  controller.addEventListener('select', onShoot); // tap to shoot
   scene.add(controller);
 
   window.addEventListener('resize', onWindowResize);
@@ -55,27 +69,127 @@ function onWindowResize(): void {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function createBox(): THREE.Object3D {
-  const geom = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-  const mat = new THREE.MeshStandardMaterial({ color: 0xff8844, roughness: 0.6, metalness: 0.2 });
-  const mesh = new THREE.Mesh(geom, mat);
-  const group = new THREE.Group();
-  group.add(mesh);
-  return group;
+function createFly(): THREE.Group {
+  const bodyGeom = new THREE.SphereGeometry(0.03, 12, 12);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.4, roughness: 0.6 });
+  const body = new THREE.Mesh(bodyGeom, bodyMat);
+
+  const headGeom = new THREE.SphereGeometry(0.02, 12, 12);
+  const headMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.3, roughness: 0.7 });
+  const head = new THREE.Mesh(headGeom, headMat);
+  head.position.set(0, 0, 0.035);
+
+  const wingGeom = new THREE.PlaneGeometry(0.05, 0.02);
+  const wingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide });
+  const wingL = new THREE.Mesh(wingGeom, wingMat);
+  const wingR = new THREE.Mesh(wingGeom, wingMat);
+  wingL.position.set(-0.03, 0.01, 0);
+  wingR.position.set(0.03, 0.01, 0);
+  wingL.rotation.y = Math.PI / 8;
+  wingR.rotation.y = -Math.PI / 8;
+
+  const fly = new THREE.Group();
+  fly.add(body);
+  fly.add(head);
+  fly.add(wingL);
+  fly.add(wingR);
+
+  fly.userData = { body, head, wingL, wingR };
+  return fly;
+}
+
+function spawnFly(origin: THREE.Vector3): Fly {
+  const group = createFly();
+  group.position.copy(origin.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, 0.1 + Math.random() * 0.2, (Math.random() - 0.5) * 0.5)));
+  scene.add(group);
+  return {
+    group,
+    velocity: new THREE.Vector3((Math.random() - 0.5) * 0.2, (Math.random() - 0.2) * 0.1, (Math.random() - 0.5) * 0.2),
+    state: 'flying',
+    targetPos: null,
+    landNormal: null,
+    flapPhase: Math.random() * Math.PI * 2
+  };
+}
+
+function updateFlies(dt: number): void {
+  // Simple flock behavior: random wander + steer to center + avoid camera
+  const center = new THREE.Vector3();
+  for (const f of flies) center.add(f.group.position);
+  if (flies.length > 0) center.multiplyScalar(1 / flies.length);
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+
+  for (const f of flies) {
+    f.flapPhase += dt * 40;
+    const { wingL, wingR } = f.group.userData;
+    const flap = Math.sin(f.flapPhase) * 0.6;
+    wingL.rotation.z = flap;
+    wingR.rotation.z = -flap;
+
+    if (f.state === 'flying') {
+      const toCenter = center.clone().sub(f.group.position).multiplyScalar(0.2);
+      const avoidCam = f.group.position.clone().sub(camPos).setLength(0.3);
+      const random = new THREE.Vector3((Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.03);
+      f.velocity.add(toCenter.multiplyScalar(0.5)).add(random).add(avoidCam.multiplyScalar(0.05));
+      f.velocity.clampLength(0, 0.6);
+      f.group.position.add(f.velocity.clone().multiplyScalar(dt));
+      f.group.lookAt(f.group.position.clone().add(f.velocity));
+
+      // random chance to try landing if planes known
+      if (worldPlanes.length > 0 && Math.random() < 0.01) {
+        const p = worldPlanes[Math.floor(Math.random() * worldPlanes.length)];
+        f.state = 'landing';
+        f.targetPos = p.position.clone().add(p.normal.clone().multiplyScalar(0.02));
+        f.landNormal = p.normal.clone();
+      }
+    } else if (f.state === 'landing') {
+      if (!f.targetPos || !f.landNormal) { f.state = 'flying'; continue; }
+      const toTarget = f.targetPos.clone().sub(f.group.position);
+      const dist = toTarget.length();
+      f.velocity.add(toTarget.normalize().multiplyScalar(0.4)).clampLength(0, 0.5);
+      f.group.position.add(f.velocity.clone().multiplyScalar(dt));
+      if (dist < 0.01) {
+        f.state = 'landed';
+        f.velocity.set(0, 0, 0);
+        // align to plane normal
+        const up = new THREE.Vector3(0, 1, 0);
+        const q = new THREE.Quaternion().setFromUnitVectors(up, f.landNormal);
+        f.group.quaternion.slerp(q, 0.6);
+      }
+    } else if (f.state === 'landed') {
+      // occasionally take off
+      if (Math.random() < 0.003) {
+        f.state = 'flying';
+        f.velocity.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.2, (Math.random() - 0.5) * 0.3);
+      }
+    }
+  }
+}
+
+function onShoot(): void {
+  // Raycast from screen center into scene and remove first fly intersected
+  const centerNDC = new THREE.Vector2(0, 0);
+  raycaster.setFromCamera(centerNDC, camera);
+  const flyMeshes: THREE.Object3D[] = flies.map(f => f.group);
+  const intersections = raycaster.intersectObjects(flyMeshes, true);
+  if (intersections.length > 0) {
+    const obj = intersections[0].object;
+    const fly = flies.find(f => f.group === obj || f.group.children.includes(obj as THREE.Object3D));
+    if (fly) {
+      scene.remove(fly.group);
+      const idx = flies.indexOf(fly);
+      if (idx >= 0) flies.splice(idx, 1);
+      hintEl.textContent = `Муха подбита! Осталось: ${flies.length}`;
+    }
+  }
 }
 
 async function startAR(): Promise<void> {
-  if (started) return; // prevent double start
-  if (!('xr' in navigator)) {
-    hintEl.textContent = 'WebXR не поддерживается на этом устройстве/браузере';
-    return;
-  }
-
+  if (started) return;
+  if (!('xr' in navigator)) { hintEl.textContent = 'WebXR не поддерживается'; return; }
   const supports = await (navigator as any).xr.isSessionSupported('immersive-ar');
-  if (!supports) {
-    hintEl.textContent = 'AR-сессии не поддерживаются';
-    return;
-  }
+  if (!supports) { hintEl.textContent = 'AR-сессии не поддерживаются'; return; }
 
   setupThree();
 
@@ -95,9 +209,7 @@ async function startAR(): Promise<void> {
   xrViewerSpace = await session.requestReferenceSpace('viewer');
 
   xrHitTestSource = await (session as any).requestHitTestSource?.({ space: xrViewerSpace });
-  if (!xrHitTestSource) {
-    hintEl.textContent = 'Hit-test недоступен';
-  }
+  if (!xrHitTestSource) { hintEl.textContent = 'Hit-test недоступен'; }
 
   session.addEventListener('end', () => {
     xrHitTestSource?.cancel();
@@ -107,36 +219,46 @@ async function startAR(): Promise<void> {
     started = false;
   });
 
+  const origin = new THREE.Vector3(0, 0, -0.5);
+  for (let i = 0; i < maxFlies; i++) flies.push(spawnFly(origin));
+
+  let lastTime = 0;
   renderer.setAnimationLoop((time, frame) => {
-    if (!frame || !reticle || !xrLocalSpace || !xrHitTestSource) {
-      renderer.render(scene, camera);
-      return;
-    }
+    const t = time / 1000;
+    const dt = lastTime === 0 ? 0.016 : Math.min(0.05, t - lastTime);
+    lastTime = t;
 
-    const hitTestResults = (frame as any).getHitTestResults?.(xrHitTestSource) ?? [];
-    if (hitTestResults.length > 0) {
-      const pose = hitTestResults[0].getPose(xrLocalSpace as XRReferenceSpace);
-      if (pose) {
-        const mat = new THREE.Matrix4().fromArray(pose.transform.matrix as unknown as number[]);
-        reticle.matrix = mat;
-        reticle.visible = true;
+    if (frame && xrLocalSpace && xrHitTestSource && reticle) {
+      const hitTestResults = (frame as any).getHitTestResults?.(xrHitTestSource) ?? [];
+      if (hitTestResults.length > 0) {
+        const pose = hitTestResults[0].getPose(xrLocalSpace as XRReferenceSpace);
+        if (pose) {
+          const mat = new THREE.Matrix4().fromArray(pose.transform.matrix as unknown as number[]);
+          reticle.matrix = mat;
+          reticle.visible = true;
+
+          // Record plane for landing: position and normal
+          const pos = new THREE.Vector3();
+          const quat = new THREE.Quaternion();
+          const scl = new THREE.Vector3();
+          mat.decompose(pos, quat, scl);
+          const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quat).normalize();
+          if (worldPlanes.length < 50) {
+            worldPlanes.push({ position: pos.clone(), normal });
+          } else if (Math.random() < 0.1) {
+            worldPlanes[Math.floor(Math.random() * worldPlanes.length)] = { position: pos.clone(), normal };
+          }
+        }
+      } else {
+        reticle.visible = false;
       }
-    } else {
-      reticle.visible = false;
     }
 
+    updateFlies(dt);
     renderer.render(scene, camera);
   });
 
-  hintEl.textContent = 'Найдите плоскость и нажмите, чтобы разместить объект';
-}
-
-function onSelect(): void {
-  if (!reticle || !reticle.visible) return;
-  const obj = createBox();
-  obj.applyMatrix4(reticle.matrix);
-  obj.matrixAutoUpdate = true;
-  scene.add(obj);
+  hintEl.textContent = 'Наведите перекрестие и нажмите, чтобы стрелять в мух';
 }
 
 async function tryStartARAuto(): Promise<void> {
@@ -149,14 +271,8 @@ async function tryStartARAuto(): Promise<void> {
       overlayEl.style.display = 'flex';
       const onTap = async () => {
         overlayEl.removeEventListener('click', onTap);
-        try {
-          await startAR();
-        } catch (e) {
-          console.error(e);
-          hintEl.textContent = 'Не удалось запустить AR: ' + (e as any)?.message;
-        } finally {
-          overlayEl.style.display = 'none';
-        }
+        try { await startAR(); } catch (e) { console.error(e); hintEl.textContent = 'Не удалось запустить AR'; }
+        finally { overlayEl.style.display = 'none'; }
       };
       overlayEl.addEventListener('click', onTap);
     } else {
@@ -167,6 +283,5 @@ async function tryStartARAuto(): Promise<void> {
 }
 
 window.addEventListener('load', () => {
-  // Небольшая задержка чтобы страница стала видимой
   setTimeout(() => { void tryStartARAuto(); }, 50);
 });
