@@ -208,9 +208,11 @@ function spawnHitEffect(position: THREE.Vector3): void {
     p.scale.setScalar(1 + t * 6);
     (p.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1 - t * 2);
     (p.material as any).transparent = true;
-    if (t > 0.5) { scene.remove(p); renderer.setAnimationLoop(loop); }
+    if (t > 0.5) { scene.remove(p); }
   };
-  const loop = (time: number) => { update(0.016); renderer.render(scene, camera); };
+  // integrate effect into main loop by piggybacking dt updates
+  const tick = () => { update(0.016); if (t <= 0.5) requestAnimationFrame(tick); };
+  tick();
 }
 
 function tryReload(): void {
@@ -225,6 +227,7 @@ function tryReload(): void {
 }
 
 function onShoot(): void {
+  if (!started) return; // ignore taps before start
   if (reloading) return;
   if (ammo <= 0) { playClick(300, 120, 0.4); tryReload(); return; }
   ammo -= 1; updateHUD(); playClick(900, 60, 0.35);
@@ -304,7 +307,7 @@ async function startAR(): Promise<void> {
           const pos = new THREE.Vector3();
           const quat = new THREE.Quaternion();
           const scl = new THREE.Vector3();
-          mat.decompose(pos, quat, scl);
+          (mat as THREE.Matrix4).decompose(pos, quat, scl);
           const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quat).normalize();
           if (worldPlanes.length < 50) {
             worldPlanes.push({ position: pos.clone(), normal });
@@ -325,24 +328,14 @@ async function startAR(): Promise<void> {
 }
 
 async function tryStartARAuto(): Promise<void> {
-  try {
-    await startAR();
-  } catch (err: any) {
-    const msg = String(err?.message || err);
-    const needsGesture = /gesture|activation|allowed|NotAllowed/i.test(msg) || (err?.name === 'NotAllowedError');
-    if (needsGesture) {
-      overlayEl.style.display = 'flex';
-      const onTap = async () => {
-        overlayEl.removeEventListener('click', onTap);
-        try { await startAR(); } catch (e) { console.error(e); hintEl.textContent = 'Не удалось запустить AR'; }
-        finally { overlayEl.style.display = 'none'; }
-      };
-      overlayEl.addEventListener('click', onTap);
-    } else {
-      console.error(err);
-      hintEl.textContent = 'Ошибка запуска AR: ' + msg;
-    }
-  }
+  const attempt = async () => {
+    try { await startAR(); } catch (e) { /* ignored */ }
+  };
+  // attempt immediately and also on first interactions
+  await attempt();
+  const once = async () => { document.removeEventListener('click', once); document.removeEventListener('touchstart', once); await attempt(); };
+  document.addEventListener('click', once, { once: true });
+  document.addEventListener('touchstart', once, { once: true });
 }
 
 window.addEventListener('load', () => {
