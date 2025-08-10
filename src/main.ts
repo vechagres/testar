@@ -111,7 +111,9 @@ function setupThree(): void {
   scene.add(reticle);
 
   controller = renderer.xr.getController(0);
-  controller.addEventListener('select', onShoot); // tap to shoot
+  controller.addEventListener('select', onShoot);
+  controller.addEventListener('selectstart', () => console.log('XR selectstart'));
+  controller.addEventListener('selectend', () => console.log('XR selectend'));
   scene.add(controller);
 
   window.addEventListener('resize', onWindowResize);
@@ -232,7 +234,6 @@ function spawnHitEffect(position: THREE.Vector3): void {
     (p.material as any).transparent = true;
     if (t > 0.5) { scene.remove(p); }
   };
-  // integrate effect into main loop by piggybacking dt updates
   const tick = () => { update(0.016); if (t <= 0.5) requestAnimationFrame(tick); };
   tick();
 }
@@ -361,14 +362,34 @@ async function tryStartARAuto(): Promise<void> {
     try { await startAR(); } catch (e) { console.error('startAR failed', e); }
   };
   await attempt();
+  const tapLog = (ev: Event) => console.log('dom tap', { type: ev.type, ts: Date.now() });
+  document.addEventListener('click', tapLog, { capture: true });
+  document.addEventListener('touchstart', tapLog, { capture: true });
+  document.addEventListener('pointerdown', tapLog, { capture: true });
+  window.addEventListener('pointerdown', tapLog, { capture: true });
+  if (renderer?.domElement) {
+    renderer.domElement.addEventListener('pointerdown', tapLog, { capture: true });
+    renderer.domElement.addEventListener('click', tapLog, { capture: true });
+  }
+  if (overlayEl) {
+    const onOverlayTap = async (ev: Event) => {
+      console.log('overlay tap', { type: ev.type, ts: Date.now() });
+      await attempt();
+    };
+    overlayEl.addEventListener('click', onOverlayTap);
+    overlayEl.addEventListener('touchstart', onOverlayTap);
+    overlayEl.addEventListener('pointerdown', onOverlayTap);
+  }
   const once = async (ev: Event) => {
     document.removeEventListener('click', once);
     document.removeEventListener('touchstart', once);
+    document.removeEventListener('pointerdown', once);
     console.log('tap detected for start', { type: ev.type, ts: Date.now() });
     await attempt();
   };
   document.addEventListener('click', once, { once: true });
   document.addEventListener('touchstart', once, { once: true });
+  document.addEventListener('pointerdown', once, { once: true });
 }
 
 window.addEventListener('load', () => {
