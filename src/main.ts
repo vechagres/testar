@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ensureModelLoaded, classifyImage, isDjembeLabel } from './detection';
 
 const appEl = document.getElementById('app') as HTMLDivElement;
 const hintEl = document.getElementById('hint') as HTMLDivElement;
@@ -44,6 +45,11 @@ let score = 0;
 let ammo = 6;
 let reserve = 24;
 let reloading = false;
+
+// Pre-AR video for detection
+let preCamStream: MediaStream | null = null;
+let preVideoEl: HTMLVideoElement | null = null;
+let detectionInterval: number | null = null;
 
 // Flies state
 interface Fly {
@@ -285,6 +291,57 @@ function onShoot(): void {
   if (ammo === 0) tryReload();
 }
 
+async function tryStartDjembeDetection(): Promise<boolean> {
+  try {
+    await ensureModelLoaded();
+    preVideoEl = document.createElement('video');
+    preVideoEl.setAttribute('playsinline', 'true');
+    preVideoEl.muted = true;
+    preVideoEl.autoplay = true;
+    preVideoEl.width = 320; preVideoEl.height = 240;
+    preVideoEl.style.position = 'fixed';
+    preVideoEl.style.right = '10px';
+    preVideoEl.style.top = '80px';
+    preVideoEl.style.width = '160px';
+    preVideoEl.style.opacity = '0.001'; // practically invisible
+    document.body.appendChild(preVideoEl);
+
+    preCamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    preVideoEl.srcObject = preCamStream;
+    await preVideoEl.play();
+
+    let detected = false;
+    detectionInterval = window.setInterval(async () => {
+      if (!preVideoEl) return;
+      const preds = await classifyImage(preVideoEl, 5);
+      const top = preds[0];
+      console.log('detection top:', top);
+      if (top && top.probability > 0.45 && isDjembeLabel(top.label)) {
+        detected = true;
+        console.log('Djembe detected!', top);
+        if (detectionInterval) { clearInterval(detectionInterval); detectionInterval = null; }
+        if (preCamStream) { preCamStream.getTracks().forEach(t => t.stop()); preCamStream = null; }
+        if (preVideoEl) { preVideoEl.remove(); preVideoEl = null; }
+        await startAR();
+      }
+    }, 800) as unknown as number;
+
+    // Stop detection after 20s if not found
+    setTimeout(() => {
+      if (!detected) {
+        console.log('Djembe not detected within timeout');
+        if (detectionInterval) { clearInterval(detectionInterval); detectionInterval = null; }
+        if (preCamStream) { preCamStream.getTracks().forEach(t => t.stop()); preCamStream = null; }
+        if (preVideoEl) { preVideoEl.remove(); preVideoEl = null; }
+      }
+    }, 20000);
+    return true;
+  } catch (e) {
+    console.warn('Detection init failed', e);
+    return false;
+  }
+}
+
 async function startAR(): Promise<void> {
   if (started) return;
   if (!('xr' in navigator)) { hintEl.textContent = 'WebXR не поддерживается'; console.warn('navigator.xr missing'); return; }
@@ -365,6 +422,10 @@ async function tryStartARAuto(): Promise<void> {
   window.addEventListener('pointerdown', globalTap, { capture: true });
   document.addEventListener('keydown', (e) => console.log('keydown', e.key));
   document.addEventListener('keyup', (e) => console.log('keyup', e.key));
+
+  // Start djembe detection pre-AR
+  await tryStartDjembeDetection();
+
   await attempt();
   const once = async (ev: Event) => {
     document.removeEventListener('click', once);

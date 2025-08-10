@@ -11,6 +11,8 @@
     "preview": "vite preview --host --port 5173"
   },
   "dependencies": {
+    "@tensorflow-models/mobilenet": "^2.1.1",
+    "@tensorflow/tfjs": "^4.22.0",
     "three": "^0.179.1"
   },
   "devDependencies": {
