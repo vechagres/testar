@@ -289,85 +289,75 @@ async function startAR(): Promise<void> {
   if (started) return;
   if (!('xr' in navigator)) { hintEl.textContent = 'WebXR не поддерживается'; console.warn('navigator.xr missing'); return; }
   const supports = await (navigator as any).xr.isSessionSupported('immersive-ar');
+  console.log('isSessionSupported(immersive-ar):', supports);
   if (!supports) { hintEl.textContent = 'AR-сессии не поддерживаются'; console.warn('immersive-ar not supported'); return; }
+  try {
+    setupThree();
+    // Relax required features; make hit-test optional to avoid session rejection
+    const sessionInit: XRSessionInit = {
+      requiredFeatures: ['local'],
+      optionalFeatures: ['hit-test', 'dom-overlay', 'local-floor']
+    } as any;
+    (sessionInit as any).domOverlay = { root: document.body };
+    const session: XRSession = await (navigator as any).xr.requestSession('immersive-ar', sessionInit);
+    started = true; overlayEl.style.display = 'none'; console.log('AR session started');
+    renderer.xr.setSession(session);
 
-  setupThree();
+    // Reference space: prefer local-floor if available
+    try {
+      xrLocalSpace = await session.requestReferenceSpace('local-floor');
+      console.log('Using reference space: local-floor');
+    } catch {
+      xrLocalSpace = await session.requestReferenceSpace('local');
+      console.log('Using reference space: local');
+    }
+    xrViewerSpace = await session.requestReferenceSpace('viewer');
 
-  const session = await (navigator as any).xr.requestSession('immersive-ar', {
-    requiredFeatures: ['hit-test', 'local-floor'],
-    optionalFeatures: ['dom-overlay'],
-    domOverlay: { root: document.body as any }
-  });
-
-  started = true;
-  overlayEl.style.display = 'none';
-  console.log('AR session started');
-
-  renderer.xr.setSession(session);
-
-  const refSpace = await session.requestReferenceSpace('local');
-  xrLocalSpace = refSpace;
-  xrViewerSpace = await session.requestReferenceSpace('viewer');
-
-  xrHitTestSource = await (session as any).requestHitTestSource?.({ space: xrViewerSpace });
-  if (!xrHitTestSource) { hintEl.textContent = 'Hit-test недоступен'; console.warn('Hit-test source unavailable'); }
-
-  session.addEventListener('end', () => {
-    console.log('AR session ended');
-    xrHitTestSource?.cancel();
-    xrHitTestSource = null;
-    xrLocalSpace = null;
-    xrViewerSpace = null;
-    started = false;
-  });
-
-  const origin = new THREE.Vector3(0, 0, -0.5);
-  for (let i = 0; i < maxFlies; i++) flies.push(spawnFly(origin));
-  console.log(`Spawned ${flies.length} flies`);
-
-  let lastTime = 0;
-  renderer.setAnimationLoop((time, frame) => {
-    const t = time / 1000;
-    const dt = lastTime === 0 ? 0.016 : Math.min(0.05, t - lastTime);
-    lastTime = t;
-
-    if (frame && xrLocalSpace && xrHitTestSource && reticle) {
-      const hitTestResults = (frame as any).getHitTestResults?.(xrHitTestSource) ?? [];
-      if (hitTestResults.length > 0) {
-        const pose = hitTestResults[0].getPose(xrLocalSpace as XRReferenceSpace);
-        if (pose) {
-          const mat = new THREE.Matrix4().fromArray(pose.transform.matrix as unknown as number[]);
-          reticle.matrix = mat;
-          reticle.visible = true;
-
-          const pos = new THREE.Vector3();
-          const quat = new THREE.Quaternion();
-          const scl = new THREE.Vector3();
-          (mat as THREE.Matrix4).decompose(pos, quat, scl);
-          const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quat).normalize();
-          if (worldPlanes.length < 50) {
-            worldPlanes.push({ position: pos.clone(), normal });
-          } else if (Math.random() < 0.1) {
-            worldPlanes[Math.floor(Math.random() * worldPlanes.length)] = { position: pos.clone(), normal };
-          }
-        }
-      } else {
-        reticle.visible = false;
-      }
+    try {
+      xrHitTestSource = await (session as any).requestHitTestSource?.({ space: xrViewerSpace });
+      console.log('Hit-test source:', !!xrHitTestSource);
+    } catch (e) {
+      xrHitTestSource = null;
+      console.warn('Hit-test source request failed', e);
     }
 
-    updateFlies(dt);
-    renderer.render(scene, camera);
-  });
+    session.addEventListener('end', () => {
+      console.log('AR session ended');
+      xrHitTestSource?.cancel?.();
+      xrHitTestSource = null; xrLocalSpace = null; xrViewerSpace = null; started = false;
+    });
 
-  hintEl.textContent = 'Наведите перекрестие и нажмите, чтобы стрелять в мух';
+    const origin = new THREE.Vector3(0, 0, -0.5); for (let i = 0; i < maxFlies; i++) flies.push(spawnFly(origin)); console.log(`Spawned ${flies.length} flies`);
+
+    let lastTime = 0; renderer.setAnimationLoop((time, frame) => {
+      const t = time / 1000; const dt = lastTime === 0 ? 0.016 : Math.min(0.05, t - lastTime); lastTime = t;
+      if (frame && xrLocalSpace && xrHitTestSource && reticle) {
+        const hitTestResults = (frame as any).getHitTestResults?.(xrHitTestSource) ?? [];
+        if (hitTestResults.length > 0) {
+          const pose = hitTestResults[0].getPose(xrLocalSpace as XRReferenceSpace);
+          if (pose) {
+            const mat = new THREE.Matrix4().fromArray(pose.transform.matrix as unknown as number[]);
+            reticle.matrix = mat; reticle.visible = true;
+            const pos = new THREE.Vector3(); const quat = new THREE.Quaternion(); const scl = new THREE.Vector3();
+            (mat as THREE.Matrix4).decompose(pos, quat, scl);
+            const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quat).normalize();
+            if (worldPlanes.length < 50) { worldPlanes.push({ position: pos.clone(), normal }); }
+            else if (Math.random() < 0.1) { worldPlanes[Math.floor(Math.random() * worldPlanes.length)] = { position: pos.clone(), normal }; }
+          }
+        } else { reticle.visible = false; }
+      }
+      updateFlies(dt); renderer.render(scene, camera);
+    });
+    hintEl.textContent = 'Наведите перекрестие и нажмите, чтобы стрелять в мух';
+  } catch (err: any) {
+    console.error('requestSession failed', { name: err?.name, message: err?.message, err });
+    hintEl.textContent = 'Не удалось запустить AR (' + (err?.name || 'Error') + ')';
+    overlayEl.style.display = 'flex';
+  }
 }
 
 async function tryStartARAuto(): Promise<void> {
-  const attempt = async () => {
-    try { await startAR(); } catch (e) { console.error('startAR failed', e); }
-  };
-  // global pointer/touch logging earliest possible
+  const attempt = async () => { try { await startAR(); } catch (e) { console.error('startAR failed', e); } };
   const globalTap = (ev: Event) => console.log('global tap', { target: (ev.target as HTMLElement)?.id, type: ev.type, ts: Date.now() });
   document.addEventListener('click', globalTap, { capture: true });
   document.addEventListener('touchstart', globalTap, { capture: true, passive: false });
@@ -375,7 +365,6 @@ async function tryStartARAuto(): Promise<void> {
   window.addEventListener('pointerdown', globalTap, { capture: true });
   document.addEventListener('keydown', (e) => console.log('keydown', e.key));
   document.addEventListener('keyup', (e) => console.log('keyup', e.key));
-
   await attempt();
   const once = async (ev: Event) => {
     document.removeEventListener('click', once);
@@ -388,10 +377,7 @@ async function tryStartARAuto(): Promise<void> {
   document.addEventListener('touchstart', once, { once: true, passive: false });
   document.addEventListener('pointerdown', once, { once: true });
   if (overlayEl) {
-    const onOverlayTap = async (ev: Event) => {
-      console.log('overlay tap', { type: ev.type, ts: Date.now() });
-      await attempt();
-    };
+    const onOverlayTap = async (ev: Event) => { console.log('overlay tap', { type: ev.type, ts: Date.now() }); await attempt(); };
     overlayEl.addEventListener('click', onOverlayTap);
     overlayEl.addEventListener('touchstart', onOverlayTap, { passive: false } as any);
     overlayEl.addEventListener('pointerdown', onOverlayTap);
