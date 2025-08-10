@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 
 const appEl = document.getElementById('app') as HTMLDivElement;
-const startBtn = document.getElementById('startArBtn') as HTMLButtonElement;
 const hintEl = document.getElementById('hint') as HTMLDivElement;
+const overlayEl = document.getElementById('gestureOverlay') as HTMLDivElement;
 
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -12,6 +12,7 @@ let controller: THREE.Group | null = null;
 let xrHitTestSource: XRHitTestSource | null = null;
 let xrLocalSpace: XRReferenceSpace | null = null;
 let xrViewerSpace: XRReferenceSpace | null = null;
+let started = false;
 
 function setupThree(): void {
   scene = new THREE.Scene();
@@ -27,14 +28,12 @@ function setupThree(): void {
 
   appEl.appendChild(renderer.domElement);
 
-  // Lighting
   const ambient = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambient);
   const dir = new THREE.DirectionalLight(0xffffff, 0.8);
   dir.position.set(1, 2, 1);
   scene.add(dir);
 
-  // Reticle
   const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
   const ringMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, opacity: 0.9, transparent: true, side: THREE.DoubleSide });
   reticle = new THREE.Mesh(ringGeo, ringMat);
@@ -43,7 +42,6 @@ function setupThree(): void {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Controller for select (tap)
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
@@ -67,6 +65,7 @@ function createBox(): THREE.Object3D {
 }
 
 async function startAR(): Promise<void> {
+  if (started) return; // prevent double start
   if (!('xr' in navigator)) {
     hintEl.textContent = 'WebXR не поддерживается на этом устройстве/браузере';
     return;
@@ -86,6 +85,9 @@ async function startAR(): Promise<void> {
     domOverlay: { root: document.body as any }
   });
 
+  started = true;
+  overlayEl.style.display = 'none';
+
   renderer.xr.setSession(session);
 
   const refSpace = await session.requestReferenceSpace('local');
@@ -102,6 +104,7 @@ async function startAR(): Promise<void> {
     xrHitTestSource = null;
     xrLocalSpace = null;
     xrViewerSpace = null;
+    started = false;
   });
 
   renderer.setAnimationLoop((time, frame) => {
@@ -125,7 +128,6 @@ async function startAR(): Promise<void> {
     renderer.render(scene, camera);
   });
 
-  startBtn.style.display = 'none';
   hintEl.textContent = 'Найдите плоскость и нажмите, чтобы разместить объект';
 }
 
@@ -137,9 +139,34 @@ function onSelect(): void {
   scene.add(obj);
 }
 
-startBtn.addEventListener('click', () => {
-  startAR().catch(err => {
-    console.error(err);
-    hintEl.textContent = 'Ошибка запуска AR: ' + (err?.message ?? err);
-  });
+async function tryStartARAuto(): Promise<void> {
+  try {
+    await startAR();
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    const needsGesture = /gesture|activation|allowed|NotAllowed/i.test(msg) || (err?.name === 'NotAllowedError');
+    if (needsGesture) {
+      overlayEl.style.display = 'flex';
+      const onTap = async () => {
+        overlayEl.removeEventListener('click', onTap);
+        try {
+          await startAR();
+        } catch (e) {
+          console.error(e);
+          hintEl.textContent = 'Не удалось запустить AR: ' + (e as any)?.message;
+        } finally {
+          overlayEl.style.display = 'none';
+        }
+      };
+      overlayEl.addEventListener('click', onTap);
+    } else {
+      console.error(err);
+      hintEl.textContent = 'Ошибка запуска AR: ' + msg;
+    }
+  }
+}
+
+window.addEventListener('load', () => {
+  // Небольшая задержка чтобы страница стала видимой
+  setTimeout(() => { void tryStartARAuto(); }, 50);
 });

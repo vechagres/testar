@@ -11,20 +11,21 @@
         display: flex; gap: 8px; justify-content: center; align-items: center;
         pointer-events: none;
       }
-      #startArBtn {
-        pointer-events: all;
-        background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);
-        padding: 10px 14px; border-radius: 10px; font-size: 16px;
-      }
       #hint { color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+      #gestureOverlay {
+        position: fixed; inset: 0; display: none; z-index: 10;
+        background: rgba(0,0,0,0.6); color: #fff; 
+        display: none; align-items: center; justify-content: center;
+        font-size: 18px; text-align: center; padding: 24px;
+      }
     </style>
-    <script type="module" crossorigin src="/testar/assets/index-B-e4uN5Z.js"></script>
+    <script type="module" crossorigin src="/testar/assets/index-CqHKoC3K.js"></script>
   </head>
   <body>
     <div id="app"></div>
     <div id="ui">
-      <button id="startArBtn">Войти в AR</button>
       <div id="hint"></div>
     </div>
+    <div id="gestureOverlay">Коснитесь экрана, чтобы запустить AR</div>
   </body>
 </html>
