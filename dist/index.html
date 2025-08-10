@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebAR Android Demo</title>
+    <style>
+      html, body, #app { height: 100%; margin: 0; padding: 0; }
+      #ui {
+        position: fixed; left: 0; right: 0; bottom: 0; padding: 12px;
+        display: flex; gap: 8px; justify-content: center; align-items: center;
+        pointer-events: none;
+      }
+      #startArBtn {
+        pointer-events: all;
+        background: rgba(0,0,0,0.6); color: #fff; border: 1px solid rgba(255,255,255,0.2);
+        padding: 10px 14px; border-radius: 10px; font-size: 16px;
+      }
+      #hint { color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+    </style>
+    <script type="module" crossorigin src="/assets/index-B-e4uN5Z.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="ui">
+      <button id="startArBtn">Войти в AR</button>
+      <div id="hint"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "webar-android-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Android WebXR AR hit-test demo with Three.js",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host --port 5173"
+  },
+  "dependencies": {
+    "three": "^0.168.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.168.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  }
+}
