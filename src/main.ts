@@ -3,6 +3,9 @@ import * as THREE from 'three';
 const appEl = document.getElementById('app') as HTMLDivElement;
 const hintEl = document.getElementById('hint') as HTMLDivElement;
 const overlayEl = document.getElementById('gestureOverlay') as HTMLDivElement;
+const scoreEl = document.getElementById('score') as HTMLSpanElement;
+const ammoEl = document.getElementById('ammo') as HTMLSpanElement;
+const reloadEl = document.getElementById('reload') as HTMLSpanElement;
 
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -13,6 +16,12 @@ let xrHitTestSource: XRHitTestSource | null = null;
 let xrLocalSpace: XRReferenceSpace | null = null;
 let xrViewerSpace: XRReferenceSpace | null = null;
 let started = false;
+
+// HUD/game state
+let score = 0;
+let ammo = 6;
+let reserve = 24;
+let reloading = false;
 
 // Flies state
 interface Fly {
@@ -27,6 +36,29 @@ const flies: Fly[] = [];
 const maxFlies = 10;
 const worldPlanes: { position: THREE.Vector3; normal: THREE.Vector3 }[] = [];
 const raycaster = new THREE.Raycaster();
+
+// WebAudio
+let audioContext: AudioContext | null = null;
+function playClick(freq = 800, durationMs = 70, volume = 0.3): void {
+  try {
+    audioContext = audioContext || new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.value = volume;
+    osc.connect(gain); gain.connect(audioContext.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); osc.disconnect(); gain.disconnect(); }, durationMs);
+  } catch {}
+}
+function playHit(): void { playClick(200, 100, 0.4); }
+
+function updateHUD(): void {
+  scoreEl.textContent = `Счёт: ${score}`;
+  ammoEl.textContent = `Патроны: ${ammo}/${reserve}`;
+  reloadEl.style.display = reloading ? 'inline-block' : 'none';
+}
 
 function setupThree(): void {
   scene = new THREE.Scene();
@@ -61,6 +93,7 @@ function setupThree(): void {
   scene.add(controller);
 
   window.addEventListener('resize', onWindowResize);
+  updateHUD();
 }
 
 function onWindowResize(): void {
@@ -113,7 +146,6 @@ function spawnFly(origin: THREE.Vector3): Fly {
 }
 
 function updateFlies(dt: number): void {
-  // Simple flock behavior: random wander + steer to center + avoid camera
   const center = new THREE.Vector3();
   for (const f of flies) center.add(f.group.position);
   if (flies.length > 0) center.multiplyScalar(1 / flies.length);
@@ -136,7 +168,6 @@ function updateFlies(dt: number): void {
       f.group.position.add(f.velocity.clone().multiplyScalar(dt));
       f.group.lookAt(f.group.position.clone().add(f.velocity));
 
-      // random chance to try landing if planes known
       if (worldPlanes.length > 0 && Math.random() < 0.01) {
         const p = worldPlanes[Math.floor(Math.random() * worldPlanes.length)];
         f.state = 'landing';
@@ -152,13 +183,11 @@ function updateFlies(dt: number): void {
       if (dist < 0.01) {
         f.state = 'landed';
         f.velocity.set(0, 0, 0);
-        // align to plane normal
         const up = new THREE.Vector3(0, 1, 0);
         const q = new THREE.Quaternion().setFromUnitVectors(up, f.landNormal);
         f.group.quaternion.slerp(q, 0.6);
       }
     } else if (f.state === 'landed') {
-      // occasionally take off
       if (Math.random() < 0.003) {
         f.state = 'flying';
         f.velocity.set((Math.random() - 0.5) * 0.3, 0.2 + Math.random() * 0.2, (Math.random() - 0.5) * 0.3);
@@ -167,22 +196,57 @@ function updateFlies(dt: number): void {
   }
 }
 
+function spawnHitEffect(position: THREE.Vector3): void {
+  const geom = new THREE.SphereGeometry(0.02, 10, 10);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+  const p = new THREE.Mesh(geom, mat);
+  p.position.copy(position);
+  scene.add(p);
+  let t = 0;
+  const update = (dt: number) => {
+    t += dt;
+    p.scale.setScalar(1 + t * 6);
+    (p.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1 - t * 2);
+    (p.material as any).transparent = true;
+    if (t > 0.5) { scene.remove(p); renderer.setAnimationLoop(loop); }
+  };
+  const loop = (time: number) => { update(0.016); renderer.render(scene, camera); };
+}
+
+function tryReload(): void {
+  if (reloading || ammo >= 6 || reserve <= 0) return;
+  reloading = true; updateHUD();
+  setTimeout(() => {
+    const need = 6 - ammo;
+    const take = Math.min(need, reserve);
+    ammo += take; reserve -= take;
+    reloading = false; updateHUD();
+  }, 900);
+}
+
 function onShoot(): void {
-  // Raycast from screen center into scene and remove first fly intersected
+  if (reloading) return;
+  if (ammo <= 0) { playClick(300, 120, 0.4); tryReload(); return; }
+  ammo -= 1; updateHUD(); playClick(900, 60, 0.35);
+
   const centerNDC = new THREE.Vector2(0, 0);
   raycaster.setFromCamera(centerNDC, camera);
   const flyMeshes: THREE.Object3D[] = flies.map(f => f.group);
   const intersections = raycaster.intersectObjects(flyMeshes, true);
   if (intersections.length > 0) {
-    const obj = intersections[0].object;
+    const hit = intersections[0];
+    const obj = hit.object;
     const fly = flies.find(f => f.group === obj || f.group.children.includes(obj as THREE.Object3D));
     if (fly) {
       scene.remove(fly.group);
       const idx = flies.indexOf(fly);
       if (idx >= 0) flies.splice(idx, 1);
-      hintEl.textContent = `Муха подбита! Осталось: ${flies.length}`;
+      score += 1; updateHUD(); playHit();
+      spawnHitEffect(hit.point);
     }
   }
+
+  if (ammo === 0) tryReload();
 }
 
 async function startAR(): Promise<void> {
@@ -237,7 +301,6 @@ async function startAR(): Promise<void> {
           reticle.matrix = mat;
           reticle.visible = true;
 
-          // Record plane for landing: position and normal
           const pos = new THREE.Vector3();
           const quat = new THREE.Quaternion();
           const scl = new THREE.Vector3();
