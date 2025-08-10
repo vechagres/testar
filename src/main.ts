@@ -6,6 +6,28 @@ const overlayEl = document.getElementById('gestureOverlay') as HTMLDivElement;
 const scoreEl = document.getElementById('score') as HTMLSpanElement;
 const ammoEl = document.getElementById('ammo') as HTMLSpanElement;
 const reloadEl = document.getElementById('reload') as HTMLSpanElement;
+const debugEl = document.getElementById('debugConsole') as HTMLDivElement;
+
+// in-page console
+(function setupConsoleRelay() {
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  function append(type: 'log'|'warn'|'error', args: any[]) {
+    if (!debugEl) return;
+    const line = document.createElement('div');
+    line.className = type === 'log' ? '' : type;
+    try {
+      const text = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+      line.textContent = `[${type}] ${text}`;
+    } catch {
+      line.textContent = `[${type}] ${args.join(' ')}`;
+    }
+    debugEl.appendChild(line);
+    debugEl.scrollTop = debugEl.scrollHeight;
+  }
+  console.log = (...a: any[]) => { append('log', a); orig.log.apply(console, a as any); };
+  console.warn = (...a: any[]) => { append('warn', a); orig.warn.apply(console, a as any); };
+  console.error = (...a: any[]) => { append('error', a); orig.error.apply(console, a as any); };
+})();
 
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -254,9 +276,9 @@ function onShoot(): void {
 
 async function startAR(): Promise<void> {
   if (started) return;
-  if (!('xr' in navigator)) { hintEl.textContent = 'WebXR не поддерживается'; return; }
+  if (!('xr' in navigator)) { hintEl.textContent = 'WebXR не поддерживается'; console.warn('navigator.xr missing'); return; }
   const supports = await (navigator as any).xr.isSessionSupported('immersive-ar');
-  if (!supports) { hintEl.textContent = 'AR-сессии не поддерживаются'; return; }
+  if (!supports) { hintEl.textContent = 'AR-сессии не поддерживаются'; console.warn('immersive-ar not supported'); return; }
 
   setupThree();
 
@@ -268,6 +290,7 @@ async function startAR(): Promise<void> {
 
   started = true;
   overlayEl.style.display = 'none';
+  console.log('AR session started');
 
   renderer.xr.setSession(session);
 
@@ -276,9 +299,10 @@ async function startAR(): Promise<void> {
   xrViewerSpace = await session.requestReferenceSpace('viewer');
 
   xrHitTestSource = await (session as any).requestHitTestSource?.({ space: xrViewerSpace });
-  if (!xrHitTestSource) { hintEl.textContent = 'Hit-test недоступен'; }
+  if (!xrHitTestSource) { hintEl.textContent = 'Hit-test недоступен'; console.warn('Hit-test source unavailable'); }
 
   session.addEventListener('end', () => {
+    console.log('AR session ended');
     xrHitTestSource?.cancel();
     xrHitTestSource = null;
     xrLocalSpace = null;
@@ -288,6 +312,7 @@ async function startAR(): Promise<void> {
 
   const origin = new THREE.Vector3(0, 0, -0.5);
   for (let i = 0; i < maxFlies; i++) flies.push(spawnFly(origin));
+  console.log(`Spawned ${flies.length} flies`);
 
   let lastTime = 0;
   renderer.setAnimationLoop((time, frame) => {
@@ -329,9 +354,8 @@ async function startAR(): Promise<void> {
 
 async function tryStartARAuto(): Promise<void> {
   const attempt = async () => {
-    try { await startAR(); } catch (e) { /* ignored */ }
+    try { await startAR(); } catch (e) { console.error('startAR failed', e); }
   };
-  // attempt immediately and also on first interactions
   await attempt();
   const once = async () => { document.removeEventListener('click', once); document.removeEventListener('touchstart', once); await attempt(); };
   document.addEventListener('click', once, { once: true });
